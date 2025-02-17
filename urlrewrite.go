@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 )
 
@@ -28,6 +27,7 @@ type FullUrlRewrite struct {
 	rewriteRule *rewriteRule
 }
 
+// New creates a new FullUrlRewrite plugin.
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
 	regexp, err := regexp.Compile(config.Regex)
 	if err != nil {
@@ -45,29 +45,37 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 }
 
 func (fullUrlRewrite *FullUrlRewrite) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	if err := rewriteRequestUrl(req, fullUrlRewrite.rewriteRule); err != nil {
+	newReq, err := rewriteRequestUrl(req, fullUrlRewrite.rewriteRule)
+	if err != nil {
 		http.Error(rw, fmt.Sprintf("error rewriting URL: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	fullUrlRewrite.next.ServeHTTP(rw, req)
+	fullUrlRewrite.next.ServeHTTP(rw, newReq)
 }
 
-// rewriteRequestUrl mutates the the given request with new URL according to the given rule.
-// If the resulting URL is invalid, the request URL is left unchanged.
-func rewriteRequestUrl(request *http.Request, rule *rewriteRule) error {
-	originalUrl := request.URL.String()
+// rewriteRequestUrl rewrites request URL according to the given rule
+// and returns new request instance if the URL has been updated.
+func rewriteRequestUrl(originalRequest *http.Request, rule *rewriteRule) (*http.Request, error) {
+	// Clone the URL to avoid mutating the original request
+	originalUrlCopy := *originalRequest.URL
 
-	newUrl := rule.regexp.ReplaceAllString(originalUrl, rule.replacement)
+	// Grab the Host from the request as it's not included in the URL
+	// since we're in the context of server request (we're acting as a proxy)
+	// and in such case URL only contains Path and RawQuery (see RFC 7230, Section 5.3).
+	originalUrlCopy.Host = originalRequest.Host
+	originalUrlStr := originalUrlCopy.String()
+	newUrlStr := rule.regexp.ReplaceAllString(originalUrlStr, rule.replacement)
 
-	if newUrl != originalUrl {
-		newUrlParsed, err := url.Parse(newUrl)
+	if newUrlStr != originalUrlStr {
+		// Create a new request with the new URL
+		newRequest, err := http.NewRequest(originalRequest.Method, newUrlStr, originalRequest.Body)
 		if err != nil {
-			return fmt.Errorf("error parsing new URL %q: %w", newUrl, err)
+			return nil, fmt.Errorf("error initializing request with new URL %q: %w", newUrlStr, err)
 		}
 
-		request.URL = newUrlParsed
+		return newRequest, nil
 	}
 
-	return nil
+	return originalRequest, nil
 }
