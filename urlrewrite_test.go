@@ -123,7 +123,7 @@ func TestURLRewrite(t *testing.T) {
 		{
 			name:        "Regex replacement: replace path prefix with company name from subdomain 1",
 			originalUrl: "https://cust-company1.example.com/prefix/hello",
-			regex:       "https://(cust-(\\w+)).example.com/prefix/(.+)",
+			regex:       "https://(cust-(\\w+))\\.example\\.com/prefix/(.+)",
 			replacement: "https://$1.example.com/$2/$3",
 			expectedUrl: "https://cust-company1.example.com/company1/hello",
 			expectedErr: "",
