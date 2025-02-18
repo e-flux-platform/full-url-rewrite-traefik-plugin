@@ -69,11 +69,19 @@ func rewriteRequestUrl(originalRequest *http.Request, rule *rewriteRule) (*http.
 
 	if newUrlStr != originalUrlStr {
 		// Create a new request with the new URL
-		newRequest, err := http.NewRequest(originalRequest.Method, newUrlStr, originalRequest.Body)
-		newRequest.Header = originalRequest.Header.Clone()
+		newRequest, err := http.NewRequestWithContext(
+			originalRequest.Context(),
+			originalRequest.Method,
+			newUrlStr,
+			originalRequest.Body,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("error initializing request with new URL %q: %w", newUrlStr, err)
 		}
+
+		newRequest.RequestURI = newRequest.URL.RequestURI()
+		newRequest.Header = originalRequest.Header.Clone()
+		newRequest.RemoteAddr = originalRequest.RemoteAddr
 
 		return newRequest, nil
 	}

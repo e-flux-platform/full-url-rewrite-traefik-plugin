@@ -5,5 +5,5 @@ import: github.com/e-flux-platform/full-url-rewrite-traefik-plugin
 summary: "Rewrite full request URL using regular expressions"
 
 testData:
-  regex: //(\\w+)\\.example\\.com/(.+)
+  regex: ^//(\w+)\.example\.com/(.+)
   replacement: //$1.example.com/$1/$2
