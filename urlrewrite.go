@@ -70,6 +70,7 @@ func rewriteRequestUrl(originalRequest *http.Request, rule *rewriteRule) (*http.
 	if newUrlStr != originalUrlStr {
 		// Create a new request with the new URL
 		newRequest, err := http.NewRequest(originalRequest.Method, newUrlStr, originalRequest.Body)
+		newRequest.Header = originalRequest.Header.Clone()
 		if err != nil {
 			return nil, fmt.Errorf("error initializing request with new URL %q: %w", newUrlStr, err)
 		}
