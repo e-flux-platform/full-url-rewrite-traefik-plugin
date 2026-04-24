@@ -1,11 +1,15 @@
 package full_url_rewrite_traefik_plugin
 
 import (
-	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSuccessfulInitialization(t *testing.T) {
@@ -14,11 +18,8 @@ func TestSuccessfulInitialization(t *testing.T) {
 		Replacement: "//example.com/path",
 	}
 
-	_, err := New(context.TODO(), nil, config, "test")
-
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
+	_, err := New(t.Context(), nil, config, "test")
+	require.NoError(t, err)
 }
 
 func TestInvalidRegexpInitialization(t *testing.T) {
@@ -27,11 +28,8 @@ func TestInvalidRegexpInitialization(t *testing.T) {
 		Replacement: "Something",
 	}
 
-	_, err := New(context.TODO(), nil, config, "test")
-
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
+	_, err := New(t.Context(), nil, config, "test")
+	require.Error(t, err)
 }
 
 func TestServeHTTPSuccessfullyRewritesRequestUrl(t *testing.T) {
@@ -42,23 +40,18 @@ func TestServeHTTPSuccessfullyRewritesRequestUrl(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check the new request URL is what we expect.
-		if r.URL.String() != "//example.com/world" {
-			t.Errorf("handler returned unexpected URL: expected %v, got %v", "//example.com/world", r.URL.String())
-		}
-
+		assert.Equal(t, "//example.com/world", r.URL.String())
 		_, _ = w.Write([]byte("OK"))
 	})
 
-	plugin, _ := New(context.TODO(), testHandler, config, "test")
-	req, _ := http.NewRequest("GET", "//example.com/hello", nil)
+	plugin, err := New(t.Context(), testHandler, config, "test")
+	require.NoError(t, err)
+	req, err := http.NewRequest("GET", "//example.com/hello", nil)
+	require.NoError(t, err)
 
 	plugin.ServeHTTP(rr, req)
 
-	// Check the status code is what we expect.
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("handler returned wrong status code: expected %v, got %v", http.StatusOK, status)
-	}
+	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
 func TestServeHTTPMapsRewriteErrorToInternalServerError(t *testing.T) {
@@ -68,15 +61,14 @@ func TestServeHTTPMapsRewriteErrorToInternalServerError(t *testing.T) {
 	}
 
 	rr := httptest.NewRecorder()
-	plugin, _ := New(context.TODO(), nil, config, "test")
-	req, _ := http.NewRequest("GET", "//example.com/hello", nil)
+	plugin, err := New(t.Context(), nil, config, "test")
+	require.NoError(t, err)
+	req, err := http.NewRequest("GET", "//example.com/hello", nil)
+	require.NoError(t, err)
 
 	plugin.ServeHTTP(rr, req)
 
-	// Check the status code is what we expect.
-	if status := rr.Code; status != http.StatusInternalServerError {
-		t.Errorf("handler returned wrong status code: expected %v, got %v", http.StatusInternalServerError, status)
-	}
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 }
 
 func TestURLRewrite(t *testing.T) {
@@ -168,7 +160,8 @@ func TestURLRewrite(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, _ := http.NewRequest("GET", tc.originalUrl, nil)
+			req, err := http.NewRequest("GET", tc.originalUrl, nil)
+			require.NoError(t, err)
 			for k, v := range tc.headers {
 				req.Header.Set(k, v)
 			}
@@ -179,18 +172,67 @@ func TestURLRewrite(t *testing.T) {
 			}
 
 			newReq, err := rewriteRequestUrl(req, rule)
-			if err != nil {
-				if err.Error() != tc.expectedErr {
-					t.Fatalf("expected error to be: %v, got: %v", tc.expectedErr, err)
-				}
+			if tc.expectedErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.expectedErr, err.Error())
 				return
 			}
-
-			updatedUrl := newReq.URL.String()
-			if updatedUrl != tc.expectedUrl {
-				t.Fatalf("expected URL to be: %v, got: %v", tc.expectedUrl, updatedUrl)
-				return
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedUrl, newReq.URL.String())
 		})
 	}
+}
+
+func TestGetBody(t *testing.T) {
+	rule := &rewriteRule{
+		regexp:      regexp.MustCompile("hello"),
+		replacement: "goodbye",
+	}
+
+	const payload = "important"
+
+	req, err := http.NewRequest("POST", "//example.com/hello", strings.NewReader(payload))
+	require.NoError(t, err)
+	require.NotNil(t, req.GetBody, "incoming client-style request exposes GetBody for reopening")
+
+	out, err := rewriteRequestUrl(req, rule)
+	require.NoError(t, err)
+	assert.NotNil(t, out.GetBody)
+
+	// First read:
+	reader, err := out.GetBody()
+	require.NoError(t, err)
+	first, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(first))
+
+	// Second read:
+	reader, err = out.GetBody()
+	require.NoError(t, err)
+	second, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(second))
+}
+
+func TestContentLength(t *testing.T) {
+	rule := &rewriteRule{
+		regexp:      regexp.MustCompile("hello"),
+		replacement: "goodbye",
+	}
+
+	const payload = "important"
+
+	// Only io.Reader (wrapped by NopCloser), not *bytes.Buffer / *strings.Reader, so net/http
+	// cannot infer length and uses -1—while the reverse proxy may already know Content-Length.
+	opaque := struct{ io.Reader }{Reader: strings.NewReader(payload)}
+	req, err := http.NewRequest("POST", "//example.com/hello", io.NopCloser(opaque))
+	require.NoError(t, err)
+	req.ContentLength = int64(len(payload))
+
+	out, err := rewriteRequestUrl(req, rule)
+	require.NoError(t, err)
+
+	assert.Equal(t, req.ContentLength, out.ContentLength)
+	assert.Equal(t, int64(len(payload)), out.ContentLength)
+	assert.Nil(t, out.GetBody)
 }

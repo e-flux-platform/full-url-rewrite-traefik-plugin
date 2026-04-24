@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 )
 
@@ -99,24 +100,16 @@ func replaceInSource(source []string, rule *rewriteRule) (string, bool) {
 func rewriteRequestUrl(originalRequest *http.Request, rule *rewriteRule) (*http.Request, error) {
 	replacementSource := getReplacementSource(rule.sourceStringFromHeader, originalRequest)
 
-	// Attempt to rewrite the strings from the replacement source to produce the new URL
-	if newUrlStr, ok := replaceInSource(replacementSource, rule); ok {
-		// Create a new request with the new URL
-		newRequest, err := http.NewRequestWithContext(
-			originalRequest.Context(),
-			originalRequest.Method,
-			newUrlStr,
-			originalRequest.Body,
-		)
+	// Attempt to rewrite the strings from the replacement source to produce the new URL:
+	if newURLStr, ok := replaceInSource(replacementSource, rule); ok {
+		// Attempt to parse the new URL:
+		newURL, err := url.Parse(newURLStr)
 		if err != nil {
-			return nil, fmt.Errorf("error initializing request with new URL %q: %w", newUrlStr, err)
+			return nil, fmt.Errorf("error initializing request with new URL %q: %w", newURLStr, err)
 		}
-
-		newRequest.RequestURI = newRequest.URL.RequestURI()
-		newRequest.Header = originalRequest.Header.Clone()
-		newRequest.RemoteAddr = originalRequest.RemoteAddr
-
-		return newRequest, nil
+		// Mutate the original request, rather than recreating, to persist metadata:
+		originalRequest.URL = newURL
+		originalRequest.RequestURI = originalRequest.URL.RequestURI()
 	}
 
 	return originalRequest, nil
